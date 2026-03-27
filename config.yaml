@@ -1,0 +1,11 @@
+alert_objects:
+  - cell phone
+  - bottle
+  - knife
+video_path: "recorded_videos/"
+image_path: "captured_images/"
+cam_width: 1280
+cam_height: 720
+fps: 20
+alert_sound: "resources/alert.mp3"
+video_clip_length: 100

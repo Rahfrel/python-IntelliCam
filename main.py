@@ -1,40 +1,40 @@
 import streamlit as st
 import cv2
-import torch
-from utils import save_image, save_video_clip
-from playsound import playsound
-import numpy as np
+import yaml
+from detection.yolo_model import YOLODetector
+from detection.tracker import ObjectTracker
+from storage.save_image import save_image
+from storage.save_video import save_video_clip
+from alerts.sound_alert import trigger_alert
+from analytics.counter import count_objects
 
-st.set_page_config(page_title="Système intelligent AI", layout="wide")
-st.title("Surveillance intelligente – Détection d'objets & alertes")
+# Charger config
+with open("config.yaml", "r") as f:
+    config = yaml.safe_load(f)
 
-# Charger modèle YOLOv5/YOLOv8 pré-entraîné
-@st.cache_resource
-def load_model():
-    return torch.hub.load('ultralytics/yolov5', 'yolov5s', pretrained=True)
-model = load_model()
+ALERT_OBJECTS = config['alert_objects']
+VIDEO_PATH = config['video_path']
+IMAGE_PATH = config['image_path']
+CAM_WIDTH = config['cam_width']
+CAM_HEIGHT = config['cam_height']
+FPS = config['fps']
+VIDEO_CLIP_LENGTH = config['video_clip_length']
 
-# Initialiser webcam
-FRAME_WINDOW = st.image([])
+st.set_page_config(page_title="SmartVisionAI", layout="wide")
+st.title("SmartVisionAI – Système de surveillance intelligent")
+
+# Initialisation
+detector = YOLODetector()
+tracker = ObjectTracker()
 cap = cv2.VideoCapture(0)
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-if not cap.isOpened():
-    st.error("Impossible d'accéder à la webcam")
-    st.stop()
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAM_WIDTH)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAM_HEIGHT)
+FRAME_WINDOW = st.image([])
 
-# Paramètres utilisateur
-alert_objects = st.multiselect(
-    "Objets pour déclencher alerte",
-    options=list(model.names.values()),
-    default=["cell phone","bottle"]
-)
+video_frames = []
+recording = False
 manual_capture = st.button("Capturer image manuellement")
 save_videos = st.checkbox("Enregistrer clips vidéo automatiquement")
-
-# Variables pour enregistrement
-recording = False
-video_frames = []
 
 while True:
     ret, frame = cap.read()
@@ -42,42 +42,32 @@ while True:
         st.error("Impossible de lire la webcam")
         break
 
-    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    results = model(rgb_frame)
-    annotated_frame = results.render()[0]
-
-    # Compteur objets détectés
-    detected_labels = [model.names[int(box[5])] for box in results.xyxy[0]]
-    counts = {label: detected_labels.count(label) for label in set(detected_labels)}
+    annotated_frame, detected_labels = detector.predict(frame)
+    counts = count_objects(detected_labels)
     st.sidebar.write("Objets détectés:", counts)
 
-    # Alertes visuelles + sonores
-    if any(obj in detected_labels for obj in alert_objects):
-        cv2.putText(annotated_frame, "ALERTE!", (50,50),
-                    cv2.FONT_HERSHEY_SIMPLEX, 2, (0,0,255), 4)
-        playsound("alert.mp3", block=False)
+    # Alerte
+    if any(obj in detected_labels for obj in ALERT_OBJECTS):
+        annotated_frame = trigger_alert(annotated_frame)
         if save_videos:
             recording = True
 
-    # Capture manuelle d'image
+    # Capture manuelle
     if manual_capture:
-        path = save_image(annotated_frame)
+        path = save_image(annotated_frame, IMAGE_PATH)
         st.success(f"Image sauvegardée: {path}")
         manual_capture = False
 
     # Enregistrement vidéo automatique
     if recording:
         video_frames.append(frame)
-        if len(video_frames) > 100:  # ~5 sec à 20 fps
-            filename = save_video_clip(video_frames, (frame.shape[1], frame.shape[0]))
-            st.success(f"Clip vidéo sauvegardé: {filename}")
+        if len(video_frames) >= VIDEO_CLIP_LENGTH:
+            save_video_clip(video_frames, (frame.shape[1], frame.shape[0]), VIDEO_PATH, FPS)
             video_frames = []
             recording = False
 
-    # Affichage en direct
     FRAME_WINDOW.image(annotated_frame)
 
-    # Sortie
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
 
